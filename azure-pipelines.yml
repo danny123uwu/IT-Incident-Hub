@@ -1,0 +1,218 @@
+# IT Incident Hub - Azure Pipelines
+# Etapas: CI (build + pruebas + seguridad) -> Package (imágenes, humo, artefacto)
+#
+# Secretos: este pipeline no necesita ninguno. La contraseña de la base de datos de la
+# prueba de humo se genera por ejecución. Para despliegues usa Variable Groups / Library
+# marcados como secretos o Azure Key Vault; nunca valores en este archivo.
+
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+  tags:
+    include:
+      - v*
+
+pr:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: useSelfHosted
+    displayName: Usar agente autohospedado (requiere Docker en el agente)
+    type: boolean
+    default: true
+  - name: selfHostedPool
+    displayName: Nombre del pool autohospedado
+    type: string
+    default: SelfHosted-Linux
+  - name: failOnHighVulnerabilities
+    displayName: Fallar si npm audit encuentra severidad alta/crítica
+    type: boolean
+    default: true
+
+variables:
+  nodeVersion: 24.x
+  composeProject: ih-$(Build.BuildId)
+  smokePort: 18080
+
+pool:
+  ${{ if eq(parameters.useSelfHosted, true) }}:
+    name: ${{ parameters.selfHostedPool }}
+    demands:
+      - docker
+  ${{ else }}:
+    vmImage: ubuntu-latest
+
+stages:
+  - stage: CI
+    displayName: Build, pruebas y seguridad
+    jobs:
+      - job: Backend
+        displayName: Backend (lint + pruebas + PostgreSQL 18)
+        steps:
+          - checkout: self
+          - task: NodeTool@0
+            displayName: Instalar Node $(nodeVersion)
+            inputs:
+              versionSpec: $(nodeVersion)
+          - script: |
+              if [ -f package-lock.json ]; then npm ci; else npm install; fi
+            workingDirectory: backend
+            displayName: Instalar dependencias
+          - script: npm run lint
+            workingDirectory: backend
+            displayName: Lint
+          - script: |
+              set -e
+              docker rm -f ih-ci-pg-$(Build.BuildId) >/dev/null 2>&1 || true
+              docker run -d --name ih-ci-pg-$(Build.BuildId) \
+                -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1::5432 postgres:18-alpine
+              PORT=$(docker port ih-ci-pg-$(Build.BuildId) 5432/tcp | head -n1 | sed 's/.*://')
+              for i in $(seq 1 30); do
+                docker exec ih-ci-pg-$(Build.BuildId) pg_isready -U postgres && break
+                sleep 2
+              done
+              echo "##vso[task.setvariable variable=testDbPort]$PORT"
+            displayName: Levantar PostgreSQL 18 efímero para pruebas
+          - script: npm run test:ci
+            workingDirectory: backend
+            displayName: Pruebas (unitarias, API e integración)
+            env:
+              TEST_DATABASE_URL: postgres://postgres@127.0.0.1:$(testDbPort)/postgres
+          - script: docker rm -f ih-ci-pg-$(Build.BuildId) || true
+            condition: always()
+            displayName: Detener PostgreSQL de pruebas
+          - task: PublishTestResults@2
+            condition: always()
+            displayName: Publicar resultados de pruebas
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: backend/test-results/junit.xml
+              testRunTitle: Backend
+              failTaskOnFailedTests: true
+
+      - job: Frontend
+        displayName: Frontend (lint + pruebas + build)
+        steps:
+          - checkout: self
+          - task: NodeTool@0
+            displayName: Instalar Node $(nodeVersion)
+            inputs:
+              versionSpec: $(nodeVersion)
+          - script: |
+              if [ -f package-lock.json ]; then npm ci; else npm install; fi
+            workingDirectory: frontend
+            displayName: Instalar dependencias
+          - script: npm run lint
+            workingDirectory: frontend
+            displayName: Lint
+          - script: npm run test:ci
+            workingDirectory: frontend
+            displayName: Pruebas con cobertura
+          - script: npm run build
+            workingDirectory: frontend
+            displayName: Build de producción
+          - task: PublishTestResults@2
+            condition: always()
+            displayName: Publicar resultados de pruebas
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: frontend/test-results/junit.xml
+              testRunTitle: Frontend
+              failTaskOnFailedTests: true
+          - task: PublishCodeCoverageResults@2
+            condition: succeededOrFailed()
+            displayName: Publicar cobertura
+            inputs:
+              summaryFileLocation: frontend/coverage/cobertura-coverage.xml
+
+      - job: Security
+        displayName: Revisión de dependencias
+        steps:
+          - checkout: self
+          - task: NodeTool@0
+            inputs:
+              versionSpec: $(nodeVersion)
+          - script: |
+              set -e
+              mkdir -p $(Build.ArtifactStagingDirectory)/audit
+              for project in backend frontend; do
+                (cd "$project" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
+                (cd "$project" && npm audit --json > "$(Build.ArtifactStagingDirectory)/audit/$project.json" || true)
+              done
+            displayName: Generar reportes de npm audit
+          - ${{ if eq(parameters.failOnHighVulnerabilities, true) }}:
+              - script: |
+                  set -e
+                  for project in backend frontend; do
+                    (cd "$project" && npm audit --omit=dev --audit-level=high)
+                  done
+                displayName: Fallar con vulnerabilidades altas/críticas (producción)
+          - task: PublishPipelineArtifact@1
+            condition: always()
+            displayName: Publicar reportes de auditoría
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/audit
+              artifact: dependency-audit
+
+  - stage: Package
+    displayName: Empaquetado y artefacto
+    dependsOn: CI
+    condition: succeeded()
+    jobs:
+      - job: PackageAndSmoke
+        displayName: Imágenes, prueba de humo y artefacto
+        steps:
+          - checkout: self
+          - task: NodeTool@0
+            inputs:
+              versionSpec: $(nodeVersion)
+          - script: |
+              set -e
+              VERSION=$(node -p "require('./backend/package.json').version")
+              echo "##vso[task.setvariable variable=appVersion]$VERSION"
+              echo "Versión: $VERSION"
+            displayName: Leer versión (SemVer)
+          - script: |
+              set -e
+              sed "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/; s/^WEB_PORT=.*/WEB_PORT=$(smokePort)/" .env.example > .env
+              docker compose -p $(composeProject) up -d --build --wait
+            displayName: Construir imágenes y levantar el sistema
+            env:
+              APP_VERSION: $(appVersion)
+          - script: node tests/smoke.mjs
+            displayName: Prueba de humo extremo a extremo
+            env:
+              BASE_URL: http://localhost:$(smokePort)
+          - script: docker compose -p $(composeProject) logs --no-color
+            condition: failed()
+            displayName: Logs si falla
+            env:
+              APP_VERSION: $(appVersion)
+          - script: docker compose -p $(composeProject) down --volumes --remove-orphans
+            condition: always()
+            displayName: Limpiar contenedores
+            env:
+              APP_VERSION: $(appVersion)
+          - script: |
+              set -e
+              OUT="$(Build.ArtifactStagingDirectory)/incident-hub-$(appVersion)"
+              mkdir -p "$OUT/database"
+              docker save incident-hub-backend:$(appVersion) incident-hub-frontend:$(appVersion) | gzip > "$OUT/images.tar.gz"
+              cp devops/docker-compose.release.yml "$OUT/docker-compose.release.yml"
+              cp .env.example "$OUT/.env.example"
+              cp database/init.sql "$OUT/database/init.sql"
+              echo "$(appVersion)" > "$OUT/VERSION"
+              echo "$(Build.SourceVersion)" > "$OUT/COMMIT"
+              (cd "$OUT" && sha256sum images.tar.gz > SHA256SUMS)
+            displayName: Armar artefacto de release
+            env:
+              APP_VERSION: $(appVersion)
+          - task: PublishPipelineArtifact@1
+            displayName: Publicar artefacto
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/incident-hub-$(appVersion)
+              artifact: incident-hub-$(appVersion)

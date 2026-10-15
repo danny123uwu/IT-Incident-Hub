@@ -1,0 +1,44 @@
+# Compose para ejecutar una versión ya publicada (imágenes del artefacto del pipeline).
+# Uso:
+#   gunzip -c images.tar.gz | docker load
+#   APP_VERSION=1.0.0 docker compose -f docker-compose.release.yml --env-file .env up -d --wait
+name: incident-hub-release
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-incidenthub}
+      POSTGRES_USER: ${POSTGRES_USER:-incidenthub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    image: incident-hub-backend:${APP_VERSION:?Defina APP_VERSION}
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgres://${POSTGRES_USER:-incidenthub}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-incidenthub}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    image: incident-hub-frontend:${APP_VERSION:?Defina APP_VERSION}
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  db-data:

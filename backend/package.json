@@ -1,0 +1,27 @@
+{
+  "name": "incident-hub-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "API REST de IT Incident Hub",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "lint": "eslint .",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "test:ci": "mkdir -p test-results && node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results/junit.xml \"tests/**/*.test.js\""
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "eslint": "^9.30.0",
+    "globals": "^16.3.0"
+  }
+}
