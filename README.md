@@ -60,7 +60,7 @@ Pruebas locales: `npm test` en cada carpeta. Las pruebas de integración con Pos
 ## Pipelines
 
 - **GitHub Actions**: en cada PR y push a `main` ejecuta lint y pruebas de backend (con PostgreSQL 18), lint/pruebas/build del frontend, `npm audit`, Dependency Review (solo PR) y prueba de humo sobre los contenedores.
-- **Azure Pipelines**: etapa *CI* (checkout, instalación, lint, build, pruebas con resultados JUnit, auditoría de dependencias) y etapa *Package* (imágenes, prueba de humo, artefacto con `images.tar.gz`, compose de release y checksums). Por defecto usa el pool autohospedado `SelfHosted-Linux` (el agente necesita Docker); desactiva el parámetro `useSelfHosted` para usar `ubuntu-latest`.
+- **Azure Pipelines**: etapa *CI* (checkout, instalación, lint, build, pruebas con resultados JUnit, auditoría de dependencias) y etapa *Package* (imágenes, prueba de humo, artefacto con `images.tar.gz`, compose de release y checksums). Usa el pool autohospedado Default (el agente necesita Docker).
 - Primera vez: ejecuta `npm install` en `backend/` y `frontend/` y **versiona los `package-lock.json`** para que los pipelines y las imágenes usen `npm ci` (builds reproducibles).
 
 ## Responsables
