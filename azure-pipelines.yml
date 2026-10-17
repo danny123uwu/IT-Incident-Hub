@@ -20,14 +20,10 @@ pr:
       - main
 
 parameters:
-  - name: useSelfHosted
-    displayName: Usar agente autohospedado (requiere Docker en el agente)
-    type: boolean
-    default: true
-  - name: selfHostedPool
-    displayName: Nombre del pool autohospedado
+  - name: agentPool
+    displayName: Pool con el agente autohospedado (el agente debe tener Docker instalado)
     type: string
-    default: SelfHosted-Linux
+    default: Default
   - name: failOnHighVulnerabilities
     displayName: Fallar si npm audit encuentra severidad alta/crítica
     type: boolean
@@ -38,13 +34,13 @@ variables:
   composeProject: ih-$(Build.BuildId)
   smokePort: 18080
 
+# Las expresiones de plantilla no están permitidas en la clave "pool" a nivel de pipeline
+# (error "A template expression is not allowed in this context"), por eso el pool es estático
+# y solo el nombre se parametriza.
 pool:
-  ${{ if eq(parameters.useSelfHosted, true) }}:
-    name: ${{ parameters.selfHostedPool }}
-    demands:
-      - docker
-  ${{ else }}:
-    vmImage: ubuntu-latest
+  name: ${{ parameters.agentPool }}
+  demands:
+    - docker
 
 stages:
   - stage: CI
