@@ -38,7 +38,7 @@ variables:
 # (error "A template expression is not allowed in this context"), por eso el pool es estático
 # y solo el nombre se parametriza.
 pool:
-  name: ${{ parameters.agentPool }}
+  name: Default
   demands:
     - docker
 
