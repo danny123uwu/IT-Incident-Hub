@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import IncidentList from './IncidentList.jsx';
@@ -21,7 +21,7 @@ describe('IncidentList', () => {
     await user.click(await screen.findByRole('button', { name: incident.title }));
 
     expect(onSelect).toHaveBeenCalledWith(1);
-    expect(screen.getByText('Ana Morales')).toBeInTheDocument();
+    expect(within(screen.getByRole('table')).getByText('Ana Morales')).toBeInTheDocument();
   });
 
   it('consulta sin filtros al inicio y con filtros al cambiarlos', async () => {
