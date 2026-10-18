@@ -196,6 +196,7 @@ stages:
               cp devops/docker-compose.release.yml "$OUT/docker-compose.release.yml"
               cp .env.example "$OUT/.env.example"
               cp database/init.sql "$OUT/database/init.sql"
+              cp tests/smoke.mjs "$OUT/smoke.mjs"
               echo "$(appVersion)" > "$OUT/VERSION"
               echo "$(Build.SourceVersion)" > "$OUT/COMMIT"
               (cd "$OUT" && sha256sum images.tar.gz > SHA256SUMS)
@@ -206,4 +207,73 @@ stages:
             displayName: Publicar artefacto
             inputs:
               targetPath: $(Build.ArtifactStagingDirectory)/incident-hub-$(appVersion)
-              artifact: incident-hub-$(appVersion)
+              artifact: incident-hub-release
+  # ---------------------------------------------------------------------------
+  # Estrategia de release: Package -> Staging -> Production
+  #  - Staging: se despliega automáticamente desde main o desde un tag vX.Y.Z.
+  #  - Production: solo desde un tag vX.Y.Z y con aprobación manual configurada en
+  #    Pipelines > Environments > production > Approvals and checks.
+  # Los despliegues se ejecutan con Docker Compose en el agente autohospedado.
+  # ---------------------------------------------------------------------------
+  - stage: Staging
+    displayName: Despliegue a Staging
+    dependsOn: Package
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/tags/v')))
+    jobs:
+      - deployment: DeployStaging
+        displayName: Staging + prueba de humo
+        environment: staging
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: NodeTool@0
+                  inputs:
+                    versionSpec: $(nodeVersion)
+                - script: |
+                    set -e
+                    cd "$(Pipeline.Workspace)/incident-hub-release"
+                    VERSION=$(cat VERSION)
+                    gunzip -c images.tar.gz | docker load
+                    echo "WEB_PORT=18081" > .env
+                    export APP_VERSION="$VERSION"
+                    export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
+                    # Staging es efímero: se recrea en cada despliegue (nueva contraseña, base limpia).
+                    docker compose -p ih-staging -f docker-compose.release.yml --env-file .env down --volumes --remove-orphans || true
+                    docker compose -p ih-staging -f docker-compose.release.yml --env-file .env up -d --wait
+                    BASE_URL=http://localhost:18081 node smoke.mjs
+                  displayName: Desplegar versión y validar
+
+  - stage: Production
+    displayName: Despliegue a Producción
+    dependsOn: Staging
+    condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/v'))
+    jobs:
+      - deployment: DeployProduction
+        displayName: Producción (requiere aprobación manual)
+        environment: production
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: NodeTool@0
+                  inputs:
+                    versionSpec: $(nodeVersion)
+                - script: |
+                    set -e
+                    case "$POSTGRES_PASSWORD" in
+                      ''|'$(PROD_POSTGRES_PASSWORD)')
+                        echo "##vso[task.logissue type=error]Defina PROD_POSTGRES_PASSWORD como variable SECRETA del pipeline."
+                        exit 1;;
+                    esac
+                    cd "$(Pipeline.Workspace)/incident-hub-release"
+                    VERSION=$(cat VERSION)
+                    gunzip -c images.tar.gz | docker load
+                    echo "WEB_PORT=18082" > .env
+                    export APP_VERSION="$VERSION"
+                    # Producción conserva su volumen de datos entre despliegues.
+                    docker compose -p ih-prod -f docker-compose.release.yml --env-file .env up -d --wait
+                    BASE_URL=http://localhost:18082 node smoke.mjs
+                  displayName: Desplegar versión y validar
+                  env:
+                    POSTGRES_PASSWORD: $(PROD_POSTGRES_PASSWORD)
