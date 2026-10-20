@@ -65,4 +65,8 @@ Pruebas locales: `npm test` en cada carpeta. Las pruebas de integración con Pos
 
 ## Responsables
 
-_(Completa con los nombres/usuarios del equipo.)_
+Proyecto individual.
+
+| Integrante | Rol | Usuario (Azure DevOps) |
+|---|---|---|
+| Justin Oliver Daniel Torrez | Desarrollo, DevOps, documentación y pruebas | jtorrezs |

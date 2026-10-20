@@ -1,6 +1,6 @@
 # Estrategia de release
 
-> Estado: la estrategia está definida aquí; las etapas Staging y Production se incorporan al pipeline en un Pull Request posterior. Hasta entonces el pipeline ejecuta CI y Package.
+> Estado: implementada. El pipeline ejecuta CI, Package, Staging y Production (con aprobación manual) desde la versión 0.4.0; el despliegue a Producción fue validado con el tag v0.4.1.
 
 ## Ambientes
 
