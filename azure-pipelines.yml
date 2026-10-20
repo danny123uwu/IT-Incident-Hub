@@ -262,7 +262,7 @@ stages:
                 - script: |
                     set -e
                     case "$POSTGRES_PASSWORD" in
-                      ''|'$(PROD_POSTGRES_PASSWORD)')
+                      ''|\$\(PROD_POSTGRES_PASSWORD\))
                         echo "##vso[task.logissue type=error]Defina PROD_POSTGRES_PASSWORD como variable SECRETA del pipeline."
                         exit 1;;
                     esac
